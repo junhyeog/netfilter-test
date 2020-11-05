@@ -8,12 +8,18 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-static bool isDrop = 0;
+typedef struct {
+  u_int32_t id;
+  bool isDrop;
+} IdIsDrop;
+
 static const int MAX_HOST_SIZE = 100;
+static const int HTTPMETHOD_SIZE = 10;
+
 static char target_host[MAX_HOST_SIZE];
+static char httpMethods[][HTTPMETHOD_SIZE] = {"GET ", "POST", "HEAD", "PUT ", "DELETE", "OPTIONS", "CONNECT", "TRACE", "PATCH"};
 
 static bool check_host(unsigned char *data) {
-  char httpMethods[6][8] = {"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS"};
   bool isHttp = 0;
 
   // ipv4
@@ -26,7 +32,7 @@ static bool check_host(unsigned char *data) {
   char *payload = (char *)(data + (iphdr->ip_hl << 2) + (tcphdr->th_off << 2));
 
   // http
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < sizeof(httpMethods) / HTTPMETHOD_SIZE; i++) {
     if (strncmp(httpMethods[i], payload, strlen(httpMethods[i]))) continue;
     isHttp = 1;
     break;
@@ -43,7 +49,8 @@ static bool check_host(unsigned char *data) {
 }
 
 /* returns packet id */
-static u_int32_t print_pkt(struct nfq_data *tb) {
+static IdIsDrop print_pkt(struct nfq_data *tb) {  //! check Host
+  bool isDrop = 0;
   int id = 0;
   struct nfqnl_msg_packet_hdr *ph;
   struct nfqnl_msg_packet_hw *hwph;
@@ -84,22 +91,18 @@ static u_int32_t print_pkt(struct nfq_data *tb) {
   ret = nfq_get_payload(tb, &data);
   if (ret >= 0) {
     printf("payload_len=%d ", ret);
-    if (check_host(data)) {
-      isDrop = 1;
-      printf("Drop ");
-    } else
-      isDrop = 0;
+    if (check_host(data)) isDrop = 1, printf("Drop ");
   }
   fputc('\n', stdout);
 
-  return id;
+  return {id, isDrop};
 }
 
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
               struct nfq_data *nfa, void *data) {
-  u_int32_t id = print_pkt(nfa);
+  IdIsDrop info = print_pkt(nfa);
   printf("entering callback\n");
-  return nfq_set_verdict(qh, id, isDrop ? NF_DROP : NF_ACCEPT, 0, NULL);
+  return nfq_set_verdict(qh, info.id, info.isDrop ? NF_DROP : NF_ACCEPT, 0, NULL);
 }
 
 void usage() {
